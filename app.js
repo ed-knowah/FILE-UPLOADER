@@ -2,116 +2,81 @@ const express = require("express");
 const app = express();
 const bodyParser = require("body-parser");
 const PORT = 2000 || process.env.PORT;
-const path = require("path");
-const crypto = require("crypto");
 const mongoose = require("mongoose");
 const multer = require("multer");
-const GridFsStorage = require("multer-gridfs-storage");
-const Grid = require("gridfs-stream");
-const methodOverride = require("method-override");
-const { emitWarning } = require("process");
-//const mongoUrl = "mongodb+srv://noah:yrPgJVPF2NkKCJfh@cluster1.u3lma.mongodb.net/fileUpload?retryWrites=true&w=majority"
+//const upload = multer({dest: 'uploads/'});
+const User = require("./model/user");
 const mongoUrl = "mongodb://localhost/test";
 
 //Middleware
 app.set("view engine", "ejs");
+app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.json());
-app.use(methodOverride("_method"));
+//app.use(methodOverride("_method"));
 
 //Mongo connection
 const conn = mongoose.createConnection(mongoUrl);
-
-//init gfs
-let gfs;
-
-//init stream
-conn.once("open", () => {
-  gfs = Grid(conn.db, mongoose.mongo);
-  gfs.collection("uploads");
-});
-
-//create storage engine
-
-const storage = new GridFsStorage({
-  url: mongoUrl,
-  file: (req, file) => {
-    return new Promise((resolve, reject) => {
-      crypto.randomBytes(16, (err, buf) => {
-        if (err) {
-          return reject(err);
-        }
-        const filename = buf.toString("hex") + path.extname(file.originalname);
-        const fileInfo = {
-          filename: filename,
-          bucketName: "uploads",
-        };
-        resolve(fileInfo);
-      });
+(async function () {
+  try {
+    await mongoose.connect(mongoUrl, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
     });
+    return console.log(`Successfully connected to database..`);
+  } catch (error) {
+    console.log(`Error connecting to DB`, error);
+    return process.exit(1);
+  }
+})();
+
+const FILE_TYPE_MAP = {
+  "image/png": "png",
+  "image/jpeg": "jpeg",
+  "image/jpg": "jpg",
+};
+
+//file storage engine
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const isValid = FILE_TYPE_MAP[file.mimetype];
+    let uploadError = new Error("invalid image type");
+    if (isValid) {
+      uploadError = null;
+    }
+    cb(uploadError, "public/uploads");
+  },
+  filename: function (req, file, cb) {
+    const fileName = file.originalname.split(" ").join("-");
+    const extension = FILE_TYPE_MAP[file.mimetype];
+    cb(null, `${fileName}-${Date.now()}.${extension}`);
   },
 });
-const upload = multer({ storage });
 
-// @route GET /
-// @desc Loads form
-app.get("/signup", (req, res) => {
-  res.render("signup");
+const uploadOptions = multer({ storage: storage });
+
+app.get("/", (req, res) => {
+  res.render("uploadForm");
 });
 
-app.get("/login", (req, res) => {
-  res.render("login");
-});
+app.post("/upload", uploadOptions.single("file"), async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).send("No image in the request");
+  const fileName = file.filename;
+  const basePath = `${req.protocol}://${req.get("host")}/public/upload/`;
 
+  const person = new User.userModel();
+  const { name } = req.body;
 
-// @route POST /upload
-// @desc Uploads file to DB
-
-app.post("/upload", upload.single("file"), (req, res) => {
-  const conversion_key = crypto.randomBytes(16).toString("hex");
-  res.json({
-    file: req.file,
-    status: "good",
-    encryptionKey: conversion_key,
-  });
-  //res.redirect('/');
-});
-
-app.get("/files", (req, res) => {
-  gfs.files.find().toArray((err, files) => {
-    if (!files || files.length === 0) {
-      return res.status(404).json({
-        err: "true",
-      });
+  person.image = `${basePath}${fileName}`;
+  person.name = name;
+  user = person.save((err, savedObject) => {
+    if (err) {
+      console.log(err);
+      res.status(500).send();
     }
-    return res.json(files);
+    res.send(savedObject);
   });
-});
-
-
-// @route POST
-// @desc Collects data from the User and Sends data to the server
-
-app.post("/signup", (req, res) => {
-  const { name, email, password } = req.body;
-  console.log(name, password, email);
-
-  if (!email || !name || !password) {
-    res.redirect("signup");
-  } else {
-    res.render("index");
-  }
-});
-
-app.post("/login", (req, res) => {
-  const { email, password } = req.body;
-  console.log(email, password);
-
-  if (!email || !password) {
-    res.redirect("login");
-  } else {
-    res.render("index");
-  }
 });
 
 app.listen(PORT, () => {
